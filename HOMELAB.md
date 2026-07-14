@@ -1,6 +1,6 @@
 # go2rtc — homelab fork
 
-Forked from https://github.com/AlexxIT/go2rtc. The fork is vendored as a git subtree under `apps/frigate/vendor/go2rtc` on `main`; the patch is applied in-tree (see `pkg/h264/h264.go`). This is the source of truth, no external clone or separate branch needed.
+Forked from https://github.com/AlexxIT/go2rtc. The patch lives on branch `homelab-frigate` (see `pkg/h264/h264.go`). CI builds the binary and publishes it as the `homelab-frigate` release asset; homelab-apps `apps/frigate/scripts/bootstrap.sh` downloads it and verifies the checksum. Nothing is vendored into homelab-apps.
 
 ## Why we maintain this fork
 
