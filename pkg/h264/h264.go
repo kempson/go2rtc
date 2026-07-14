@@ -91,7 +91,7 @@ func GetProfileLevelID(fmtp string) string {
 				capab = conf[1]
 			}
 			switch conf[2] {
-			case 30, 31, 40:
+			case 30, 31, 32, 40, 41, 42, 50, 51, 52, 60, 61, 62:
 				level = conf[2]
 			}
 		}

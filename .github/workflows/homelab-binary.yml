@@ -1,0 +1,55 @@
+name: homelab binary
+
+# Frigate volume-mounts a patched go2rtc binary, so publish the binary itself
+# rather than an image. Removes the laptop from the build path.
+
+on:
+  push:
+    branches: [homelab-frigate]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homelab-binary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -trimpath -ldflags "-s -w" -o go2rtc_linux_amd64 .
+          sha256sum go2rtc_linux_amd64 | tee go2rtc_linux_amd64.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go2rtc_linux_amd64
+          path: |
+            go2rtc_linux_amd64
+            go2rtc_linux_amd64.sha256
+          retention-days: 90
+
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete homelab-frigate --yes --cleanup-tag 2>/dev/null || true
+          gh release create homelab-frigate \
+            --title "go2rtc homelab-frigate build" \
+            --notes "Patched go2rtc for 4K Reolink (h264 level whitelist). Built from ${{ github.sha }}." \
+            --target "${{ github.sha }}" \
+            go2rtc_linux_amd64 go2rtc_linux_amd64.sha256
