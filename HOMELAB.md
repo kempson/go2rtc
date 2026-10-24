@@ -1,10 +1,10 @@
-# go2rtc — homelab fork
+# go2rtc homelab fork
 
-Forked from https://github.com/AlexxIT/go2rtc. The patch lives on branch `homelab-frigate` (see `pkg/h264/h264.go`). CI builds the binary and publishes it as the `homelab-frigate` release asset; homelab-apps `apps/frigate/scripts/bootstrap.sh` downloads it and verifies the checksum. Nothing is vendored into homelab-apps.
+Forked from https://github.com/AlexxIT/go2rtc. Our change lives on branch `homelab-frigate`. Frigate runs this build in place of the go2rtc bundled in its image.
 
 ## Why we maintain this fork
 
-Our Reolink cameras emit h264 at **Level 5.1** (4K). Upstream go2rtc's `pkg/h264/h264.go:GetProfileLevelID` only whitelists levels `{30, 31, 40}` and forces everything else to `41`. That means go2rtc advertises `avc1.XX0029` (Level 4.1) to MSE clients. Chrome rejects this combination for 3840×2160 content because L4.1's maximum luma sample rate can't carry 4K, so MSE stalls with `DEMUXER_UNDERFLOW` / `BUFFERING_HAVE_NOTHING` after ~1 second.
+Our Reolink cameras emit h264 at **Level 5.1** (4K). Upstream go2rtc's `pkg/h264/h264.go:GetProfileLevelID` only whitelists levels `{30, 31, 40}` and forces everything else to `41`. That means go2rtc advertises `avc1.XX0029` (Level 4.1) to MSE clients. Chrome rejects this combination for 3840x2160 content because L4.1's maximum luma sample rate can't carry 4K, so MSE stalls with `DEMUXER_UNDERFLOW` / `BUFFERING_HAVE_NOTHING` after about a second.
 
 ## Change vs upstream
 
@@ -12,43 +12,22 @@ Our Reolink cameras emit h264 at **Level 5.1** (4K). Upstream go2rtc's `pkg/h264
 
 With this, our stream gets advertised correctly as `avc1.640033` (High 5.1) and Chrome accepts it.
 
-## Build (static binary for Debian glibc-based Frigate container)
+## Build
 
-Run from the homelab-apps repo root so `$PWD/apps/frigate/vendor/go2rtc` is the vendored source path.
+`.github/workflows/homelab-binary.yml` builds a static linux/amd64 binary on every push to `homelab-frigate`. It replaces the rolling `homelab-frigate` release with two assets, `go2rtc_linux_amd64` and `go2rtc_linux_amd64.sha256`. Nothing is built on a laptop.
 
-```bash
-# One-time setup (from homelab-apps repo root)
-docker run -d --platform linux/amd64 --name go2rtc-builder \
-  -v "$PWD/apps/frigate/vendor/go2rtc:/src" -w /src \
-  golang:alpine sleep infinity
-docker exec go2rtc-builder apk add --no-cache build-base
+## Deploy
 
-# Every iteration — CGO_ENABLED=0 makes it static so it'll run in Frigate's Debian container
-docker exec go2rtc-builder sh -c 'CGO_ENABLED=0 go build -o /src/go2rtc -ldflags "-s -w" .'
-```
+homelab-apps `apps/frigate/scripts/bootstrap.sh` downloads both assets, refuses a binary that doesn't match its checksum, and pushes it to `/opt/frigate/go2rtc-patched` in LXC 111 on node4. `apps/frigate/docker-compose.yml` mounts that file read-only over `/usr/local/go2rtc/bin/go2rtc` in the Frigate container, so recreating or restarting the `frigate` container picks up a new binary. Replace the host file rather than `docker cp` into the container, because the mount is read-only and the host file wins on the next restart anyway.
 
-Binary lands at `./go2rtc` (~20 MB stripped static).
-
-## Deploy to Frigate LXC
-
-Frigate's in-container path `/usr/local/go2rtc/bin/go2rtc` is a read-only bind mount sourced from `/opt/frigate/go2rtc-patched` on the LXC host (see `apps/frigate/docker-compose.yml`). Install by replacing the host file, never `docker cp` into the container (the mount is `:ro` and the host file would shadow it on restart anyway).
+## Verify
 
 ```bash
-scp go2rtc frigate:/opt/frigate/go2rtc-patched
-ssh frigate 'chmod +x /opt/frigate/go2rtc-patched && docker restart frigate'
+pct exec 111 -- docker logs frigate 2>&1 | grep "INF go2rtc platform"
 ```
 
-Frigate's s6 init will restart its go2rtc subprocess automatically, or the docker restart covers it.
-
-## Verify the patch took effect
-
-```bash
-ssh frigate 'wget -qO- http://127.0.0.1:1984/api/streams?src=garden | grep -oE "\"level\":[0-9]+"'
-# Should show "level":51 if camera is on High 5.1 (not 41)
-```
-
-In the browser: `chrome://media-internals/` should show `Browser negotiated codecs: video/mp4; codecs="avc1.640033"` for the live view.
+The version should end in `+dev`, which marks a build from this fork. Frigate's bundled go2rtc reports a release version. In the browser, `chrome://media-internals/` should show `avc1.640033` for the 4K live view.
 
 ## Rollback
 
-Replace `/opt/frigate/go2rtc-patched` on the LXC with a stock go2rtc binary (e.g. extracted from ghcr.io/alexxit/go2rtc) and `docker restart frigate`.
+Remove the `go2rtc-patched` bind mount from `apps/frigate/docker-compose.yml` in homelab-apps and recreate the `frigate` container. Frigate then runs the go2rtc bundled in its image, and 4K live view in Chrome stalls again.
